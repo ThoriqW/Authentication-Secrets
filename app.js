@@ -6,9 +6,9 @@ const mongoose = require("mongoose");
 const session = require("express-session");
 const passport = require("passport");
 const passportLocalMongoose = require("passport-local-mongoose");
-const FacebookStrategy = require('passport-facebook').Strategy;
-const GoogleStrategy = require('passport-google-oauth20').Strategy;
-const findOrCreate = require('mongoose-findorcreate')
+const FacebookStrategy = require("passport-facebook").Strategy;
+const GoogleStrategy = require("passport-google-oauth20").Strategy;
+const findOrCreate = require("mongoose-findorcreate");
 
 const app = express();
 
@@ -36,7 +36,8 @@ const userSchema = new mongoose.Schema({
     email: String,
     password: String,
     googleId: String,
-    facebookId: String
+    facebookId: String,
+    secrets: Array
 });
 
 //Create plugin passportLocalMongoose for userSchema 
@@ -50,15 +51,15 @@ const User = new mongoose.model("User", userSchema);
 passport.use(User.createStrategy());
 
 //this is using for create a session, serializerUser for create a cookies and deserializerUser for end or crumble the cookies  
-passport.serializeUser(function(user, done) {
+passport.serializeUser(function (user, done) {
     done(null, user.id);
-  });
-  
-  passport.deserializeUser(function(id, done) {
+});
+
+passport.deserializeUser(function (id, done) {
     User.findById(id, function (err, user) {
-      done(err, user);
+        done(err, user);
     });
-  });
+});
 
 //create user or login using google account
 passport.use(new GoogleStrategy({
@@ -70,7 +71,9 @@ passport.use(new GoogleStrategy({
 
         console.log(profile);
 
-        User.findOrCreate({googleId: profile.id}, function (err, user) {
+        User.findOrCreate({
+            googleId: profile.id
+        }, function (err, user) {
             return cb(err, user);
         });
     }
@@ -78,19 +81,21 @@ passport.use(new GoogleStrategy({
 
 //create user or login with facebook account
 passport.use(new FacebookStrategy({
-    clientID: process.env.FACEBOOK_APP_ID,
-    clientSecret: process.env.FACEBOOK_APP_SECRET,
-    callbackURL: "http://localhost:3000/auth/facebook/secrets",
-    profileFields: ['id', 'displayName', 'photos', 'email']
-  },
-  function(accessToken, refreshToken, profile, cb) {
+        clientID: process.env.FACEBOOK_APP_ID,
+        clientSecret: process.env.FACEBOOK_APP_SECRET,
+        callbackURL: "http://localhost:3000/auth/facebook/secrets",
+        profileFields: ['id', 'displayName', 'photos', 'email']
+    },
+    function (accessToken, refreshToken, profile, cb) {
 
-    console.log(profile);
+        console.log(profile);
 
-    User.findOrCreate({ facebookId: profile.id }, function (err, user) {
-      return cb(err, user);
-    });
-  }
+        User.findOrCreate({
+            facebookId: profile.id
+        }, function (err, user) {
+            return cb(err, user);
+        });
+    }
 ));
 
 
@@ -113,18 +118,25 @@ app.get('/auth/google/secrets',
     function (req, res) {
         // Successful authentication, redirect secrets page.
         res.redirect("/secrets");
-    });
+    }
+);
 
 //Authenticate facebook account
-app.get('/auth/facebook',
-  passport.authenticate('facebook'));
+app.get('/auth/facebook', 
+    passport.authenticate('facebook', {
+    scope: ["email"]
+    })
+);
 
 app.get('/auth/facebook/secrets',
-  passport.authenticate('facebook', { failureRedirect: '/login' }),
-  function(req, res) {
-    // Successful authentication, redirect secrets page.
-    res.redirect('/secrets');
-  });
+    passport.authenticate('facebook', {
+        failureRedirect: '/login'
+    }),
+    function (req, res) {
+        // Successful authentication, redirect secrets page.
+        res.redirect('/secrets');
+    }
+);
 
 app.get("/login", function (req, res) {
     res.render("login");
@@ -135,16 +147,50 @@ app.get("/register", function (req, res) {
 });
 
 app.get("/secrets", function (req, res) {
-    //check if user authenticated or not
-    if (req.isAuthenticated()) {
-        res.render("secrets")
+    User.find({"secrets" : {$ne:null}}, function(err, foundUsers){
+        if(err){
+            console.log(err);
+        } else {
+            res.render("secrets", {userHaveSecret : foundUsers});
+        }
+    });
+});
+
+app.get("/submit", function(req, res) {
+    if(req.isAuthenticated()) {
+        res.render("submit")
     } else {
         res.redirect("/login")
     }
 });
 
+//create a secret text with the current user login and add into the the file user. 
+app.post("/submit", function(req, res){
+    const submittedUserSecret = req.body.secret;
+
+    console.log(req.user.id);
+
+    User.findById(req.user.id, function(err, foundUser){
+        if(err){
+            console.log(err);
+        } else {
+            if(foundUser) {
+                console.log(foundUser)
+                foundUser.secrets.push(submittedUserSecret);
+                foundUser.save(function(err){
+                    if(err){
+                        console.log(err);
+                    } else {
+                        res.redirect("/secrets");
+                    }
+                });
+            }
+        }
+    });
+});
+
 app.get("/logout", function (req, res) {
-    req.logOut();
+    req.logout();
     res.redirect("/")
 });
 
@@ -152,9 +198,7 @@ app.get("/logout", function (req, res) {
 //Route POST : Register 
 app.post("/register", function (req, res) {
 
-    User.register({
-        username: req.body.username
-    }, req.body.password, function (err, user) {
+    User.register({username: req.body.username}, req.body.password, function (err, user) {
         if (err) {
             console.log(err)
             res.redirect("/register")
@@ -176,11 +220,13 @@ app.post("/login", function (req, res) {
         password: req.body.password
     });
 
-    req.logIn(user, function (err) {
+    req.login(user, function (err) {
         if (err) {
             console.log(err)
         } else {
-            res.redirect("/secrets");
+            passport.authenticate("local")(req, res, function(){
+                res.redirect("/secrets");
+            });
         }
     });
 
